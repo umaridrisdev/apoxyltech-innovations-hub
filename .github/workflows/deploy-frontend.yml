@@ -1,0 +1,35 @@
+name: Deploy Frontend (Vercel)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   VERCEL_TOKEN   - from https://vercel.com/account/tokens
+# Required repo variables, or set directly in the Vercel project settings:
+#   NEXT_PUBLIC_API_BASE_URL - your production backend URL, e.g. https://api.apoxyltech.com/api
+#
+# One-time setup (from frontend/ locally):
+#   npx vercel link
+# This creates .vercel/project.json linking this folder to a Vercel project —
+# commit that file's projectId/orgId are not secret, but do NOT commit .vercel/.env*.

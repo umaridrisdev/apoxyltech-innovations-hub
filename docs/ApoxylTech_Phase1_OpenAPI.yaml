@@ -1,0 +1,932 @@
+openapi: 3.1.0
+info:
+  title: ApoxylTech Innovations Hub — Phase 1 API
+  version: "1.0.0"
+  description: |
+    Phase 1 MVP API for ApoxylTech Innovations Hub, covering four domains:
+    Identity & Access, Client Management, Projects, and Website CMS.
+
+    ## Scope
+    ~25–30 endpoints, matching Section 6 of `ApoxylTech_Phase1_MVP_Spec.md`.
+    Everything deferred there (invoicing, tickets, notifications, MFA, OAuth,
+    Academy, Research, Innovation Lab, Analytics) has no endpoints here.
+
+    ## Roles & Permissions
+    Phase 1 has three roles — `admin`, `client`, `guest` — but authorization is
+    enforced at the permission-code level (e.g. `project.read`, `project.update`,
+    `blog.write`) so additional roles can be introduced later without changing
+    this contract. Each operation below documents the permission(s) required.
+
+    ## Security classification policy
+    Every response schema in this spec follows the data dictionary's
+    classification rules:
+    - **Public / internal** fields may appear in responses.
+    - **Sensitive / restricted** fields (password hashes, verification/reset
+      token values, refresh token values after issuance, etc.) are never
+      included in any response body, including admin-facing ones.
+    Where a field exists on a table (per the ERD) but is excluded from every
+    response schema for this reason, it is called out in a schema-level comment.
+  contact:
+    name: ApoxylTech Engineering
+
+servers:
+  - url: https://api.apoxyltech.com/api
+    description: Production
+  - url: https://staging-api.apoxyltech.com/api
+    description: Staging
+
+tags:
+  - name: Auth
+    description: Registration, session, and password/email flows. No auth required except logout/refresh.
+  - name: Users
+    description: The authenticated user's own profile.
+  - name: Clients
+    description: Admin-facing client directory. Backed by the one-to-one users↔clients relationship.
+  - name: Projects
+    description: Project, milestone (read-only in Phase 1), and file management.
+  - name: Blog
+    description: Public blog reads; admin-authored blog writes.
+  - name: Leads
+    description: Public contact-form submissions and admin review of them.
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- AUTH
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user account
+      security: []
+      x-permission: none (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created; verification email sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPublic'
+        '409':
+          description: Email already registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate with email and password
+      security: []
+      x-permission: none (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated. Returns access token in body and sets a secure, HttpOnly session/refresh cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          description: Invalid credentials, unverified email, or deactivated account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate the current refresh token / session
+      x-permission: authenticated (any role)
+      responses:
+        '204':
+          description: Logged out.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a valid refresh token for a new access token
+      security: []
+      x-permission: valid refresh token (cookie)
+      responses:
+        '200':
+          description: New access token issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          description: Refresh token missing, expired, or revoked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Confirm an email address using the token sent at registration
+      security: []
+      x-permission: none (public; possession of a valid, unexpired token acts as auth)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: >-
+                    Single-use verification token. Note (security classification):
+                    the `email_verifications.token` column is restricted and is
+                    never returned by any GET/list endpoint — it only ever
+                    reaches the user via the verification email itself.
+      responses:
+        '200':
+          description: Email verified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPublic'
+        '400':
+          description: Token invalid, expired, or already used.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset email
+      security: []
+      x-permission: none (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202':
+          description: >-
+            Always returns 202 regardless of whether the email exists, to
+            avoid leaking account existence.
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Set a new password using a reset token
+      security: []
+      x-permission: none (public; possession of a valid, unexpired token acts as auth)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token:
+                  type: string
+                  description: >-
+                    Single-use reset token. Note: `password_resets.token` is
+                    restricted; never returned by any response body.
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 12
+      responses:
+        '200':
+          description: Password updated. All existing refresh tokens for the user are revoked.
+        '400':
+          description: Token invalid, expired, or already used.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ---------------------------------------------------------------- USERS
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get the authenticated user's own profile
+      x-permission: authenticated (any role) — implicit self-scope, no permission code needed
+      responses:
+        '200':
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPrivate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Users]
+      summary: Update the authenticated user's own profile
+      x-permission: authenticated (any role) — implicit self-scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          description: Updated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPrivate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ---------------------------------------------------------------- CLIENTS
+  /clients:
+    get:
+      tags: [Clients]
+      summary: List clients
+      x-permission: client.read (admin only in Phase 1)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated list of clients.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /clients/{id}:
+    get:
+      tags: [Clients]
+      summary: Get a single client
+      x-permission: client.read (admin only in Phase 1)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '200':
+          description: Client detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- PROJECTS
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects (own projects if client, all if admin)
+      x-permission: project.read (client role is implicitly scoped to client_id = self)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ProjectStatus'
+      responses:
+        '200':
+          description: Paginated list of projects, scoped by role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Projects]
+      summary: Create a project for a client
+      x-permission: project.create (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+      responses:
+        '201':
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /projects/{id}:
+    get:
+      tags: [Projects]
+      summary: Get a single project (including its milestones)
+      x-permission: project.read (client role restricted to own project via client_id)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '200':
+          description: Project detail with milestones.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Projects]
+      summary: Update a project's status or details
+      x-permission: project.update (admin only)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdateRequest'
+      responses:
+        '200':
+          description: Updated project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /projects/{id}/files:
+    post:
+      tags: [Projects]
+      summary: Upload a file to a project
+      x-permission: project.update (client can upload to own project; admin to any)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: File stored in Cloudflare R2; metadata recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectFile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: File exceeds size limit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      tags: [Projects]
+      summary: List files attached to a project
+      x-permission: project.read (client scoped to own project; admin to any)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated list of project files.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectFileListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- BLOG
+  /blog:
+    get:
+      tags: [Blog]
+      summary: List published blog posts
+      security: []
+      x-permission: none (public) for published posts; blog.read for drafts, if requested by an authenticated admin
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated list of blog posts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlogPostListResponse'
+    post:
+      tags: [Blog]
+      summary: Create a blog post
+      x-permission: blog.write (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlogPostCreateRequest'
+      responses:
+        '201':
+          description: Blog post created (defaults to draft status).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlogPost'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /blog/{slug}:
+    get:
+      tags: [Blog]
+      summary: Get a single published blog post by slug
+      security: []
+      x-permission: none (public) for published posts; blog.read to preview a draft
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Blog post detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlogPost'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /blog/{id}:
+    patch:
+      tags: [Blog]
+      summary: Update or publish a blog post
+      x-permission: blog.write (admin only)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlogPostUpdateRequest'
+      responses:
+        '200':
+          description: Updated blog post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlogPost'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ---------------------------------------------------------------- LEADS
+  /leads:
+    post:
+      tags: [Leads]
+      summary: Submit the public contact form
+      security: []
+      x-permission: none (public)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeadCreateRequest'
+      responses:
+        '201':
+          description: >-
+            Lead recorded and email notification sent. Response body is
+            intentionally minimal — this endpoint doesn't echo back the
+            submitted PII.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadCreateResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      tags: [Leads]
+      summary: List contact-form leads
+      x-permission: lead.read (admin only)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: >-
+            Paginated list of leads. Per the NDPR retention note on this
+            table, entries past the configured retention window are purged
+            and will not appear here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived access token. Refresh token is delivered separately as a secure, HttpOnly, SameSite cookie — never in a JSON response body.
+
+  parameters:
+    IdParam:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSizeParam:
+      name: page_size
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    ValidationError:
+      description: Request failed schema validation.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated, but lacking the required permission for this resource.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource does not exist or is outside the caller's scope.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests; rate limit applied to this endpoint.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: "validation_error" }
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true
+
+    PaginationMeta:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    # ------------------------------------------------------------ AUTH
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password:
+          type: string
+          format: password
+          minLength: 12
+          description: Hashed with Argon2 server-side; never stored or returned as plaintext.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+
+    AuthTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string, description: Short-lived JWT access token. }
+        token_type: { type: string, enum: [bearer] }
+        expires_in: { type: integer, description: Seconds until access token expiry. }
+      description: >-
+        Note (security classification): the refresh token itself is never
+        present in this or any other JSON body — it is set only as a secure,
+        HttpOnly cookie. `refresh_tokens.id`/expiry are internal bookkeeping,
+        not exposed to clients.
+
+    # ------------------------------------------------------------ USERS
+    # users table columns: id, email, password_hash, status, created_at (+ audit fields)
+    # password_hash is restricted and is excluded from every schema below.
+    UserPublic:
+      type: object
+      description: Minimal representation returned right after registration, before the caller is authenticated.
+      required: [id, email, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        status:
+          type: string
+          enum: [pending_verification, active, deactivated]
+
+    UserPrivate:
+      allOf:
+        - $ref: '#/components/schemas/UserPublic'
+        - type: object
+          required: [roles, created_at]
+          properties:
+            roles:
+              type: array
+              items: { type: string, example: "client" }
+            created_at: { type: string, format: date-time }
+
+    UserUpdateRequest:
+      type: object
+      description: Self-service profile update. Password changes go through a separate confirm-current-password flow inside this endpoint's handler, not modeled as a distinct field here to avoid transmitting old+new together insecurely.
+      properties:
+        email: { type: string, format: email }
+        password:
+          type: string
+          format: password
+          minLength: 12
+
+    # ------------------------------------------------------------ CLIENTS
+    # clients table columns per ERD: id, user_id, company_name (+ audit fields).
+    # If the full data dictionary defines additional sensitive fields on this
+    # table (e.g. billing address), they should be added to Client but
+    # deliberately excluded from ClientListItem the same way password_hash is
+    # excluded from UserPublic.
+    Client:
+      type: object
+      required: [id, user_id, company_name]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        company_name: { type: string }
+        user:
+          $ref: '#/components/schemas/UserPublic'
+
+    ClientListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Client' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # ------------------------------------------------------------ PROJECTS
+    ProjectStatus:
+      type: string
+      enum: [planning, in_progress, on_hold, completed, cancelled]
+
+    Project:
+      type: object
+      required: [id, client_id, name, status]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ProjectCreateRequest:
+      type: object
+      required: [client_id, name]
+      properties:
+        client_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+
+    ProjectUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+
+    ProjectListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Project' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Milestone:
+      type: object
+      required: [id, project_id, title]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        title: { type: string }
+        due_date: { type: string, format: date }
+      description: Read-only in Phase 1 — no create/update endpoint; milestones are managed by admins through the admin console's project workflow, not a dedicated API surface yet.
+
+    ProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/Project'
+        - type: object
+          properties:
+            milestones:
+              type: array
+              items: { $ref: '#/components/schemas/Milestone' }
+
+    ProjectFile:
+      type: object
+      required: [id, project_id, file_url]
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        file_url:
+          type: string
+          description: Signed, time-limited Cloudflare R2 URL, not a permanent public link.
+        uploaded_at: { type: string, format: date-time }
+
+    ProjectFileListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ProjectFile' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # ------------------------------------------------------------ BLOG
+    BlogPostStatus:
+      type: string
+      enum: [draft, published]
+
+    BlogPost:
+      type: object
+      required: [id, author_id, title, status]
+      properties:
+        id: { type: string, format: uuid }
+        author_id: { type: string, format: uuid }
+        title: { type: string }
+        slug: { type: string }
+        status: { $ref: '#/components/schemas/BlogPostStatus' }
+        body: { type: string }
+        published_at: { type: string, format: date-time, nullable: true }
+
+    BlogPostCreateRequest:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string }
+        body: { type: string }
+        status:
+          $ref: '#/components/schemas/BlogPostStatus'
+
+    BlogPostUpdateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+        status: { $ref: '#/components/schemas/BlogPostStatus' }
+
+    BlogPostListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/BlogPost' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # ------------------------------------------------------------ LEADS
+    # leads table: contact-form PII, subject to NDPR retention policy flagged
+    # in the MVP spec. Never joined into any other domain's response.
+    LeadCreateRequest:
+      type: object
+      required: [name, email, message]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        message: { type: string, maxLength: 5000 }
+
+    LeadCreateResponse:
+      type: object
+      required: [received]
+      properties:
+        received: { type: boolean, enum: [true] }
+
+    Lead:
+      type: object
+      required: [id, name, email, message, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        message: { type: string }
+        created_at: { type: string, format: date-time }
+      description: >-
+        Admin-facing view of a lead. Retained only per the NDPR-driven
+        retention window called out in the data dictionary — this is the one
+        table in Phase 1 where retention policy directly affects what a
+        `GET /leads` call can return over time.
+
+    LeadListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Lead' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }

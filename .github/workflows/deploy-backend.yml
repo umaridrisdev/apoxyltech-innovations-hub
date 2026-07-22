@@ -1,0 +1,67 @@
+name: Deploy Backend (Container)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-backend
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to host
+        run: |
+          echo "Wire this step to your actual host once chosen. Common options:"
+          echo "  - Fly.io:   flyctl deploy --image \${{ needs.build-and-push.outputs.image_tag }}"
+          echo "  - Railway:  railway up (via Railway's GitHub integration, often no step needed here)"
+          echo "  - Render:   Render auto-deploys on a new image push if using their GHCR integration"
+          echo "  - Plain VPS: SSH in and run: docker pull <image> && docker compose up -d"
+          echo "See DEPLOYMENT.md at the repo root for the exact commands once a host is picked."
+
+# Required repo secrets, once a host is chosen (examples):
+#   FLY_API_TOKEN     - if deploying to Fly.io
+#   DEPLOY_SSH_KEY    - if deploying to a plain VPS via SSH
+#   DEPLOY_HOST       - VPS hostname/IP
+# The image is already built and pushed to GHCR regardless of which host you pick —
+# only the final "deploy" step above needs to change.
