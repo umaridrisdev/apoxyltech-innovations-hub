@@ -60,10 +60,9 @@ class Settings(BaseSettings):
     r2_public_url_base: str = ""
 
     # --- Email (transactional: verification, password reset, lead notifications) ---
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
+    # Resend's HTTP API is used instead of raw SMTP — see app/services/email.py
+    # for why (managed hosts commonly block outbound SMTP ports).
+    resend_api_key: str = ""
     email_from_address: str = "no-reply@apoxyltech.com"
 
     # --- Sentry ---

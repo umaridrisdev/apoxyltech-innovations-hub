@@ -1,34 +1,49 @@
 """
-Transactional email sending.
+Transactional email sending, via Resend's HTTP API.
 
-Kept as a thin, swappable module (per the MVP spec's "don't stand up
-infra you're not using yet" principle) — start with SMTP directly; swap in
-a provider SDK (Postmark, SES, Resend, etc.) later without touching callers.
+Originally used raw SMTP, but managed hosts like Railway (and Render,
+Heroku) commonly block outbound SMTP ports (25/465/587) by default to
+prevent their platform being used for spam relay — see the
+"Network is unreachable" error this produced in production. Resend's API
+is a plain HTTPS POST (port 443), which isn't subject to that block.
+
+Falls back to console logging if RESEND_API_KEY isn't set, so local dev
+without any email provider configured still works exactly as before.
 """
-import smtplib
-from email.message import EmailMessage
+import httpx
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
+RESEND_API_URL = "https://api.resend.com/emails"
+
 
 def _send(to: str, subject: str, body: str) -> None:
-    if not settings.smtp_host:
-        # Local dev without SMTP configured: log instead of failing.
+    if not settings.resend_api_key:
+        # No provider configured (local dev, or not yet set up): log instead
+        # of failing, exactly as before.
         print(f"[email:dev-noop] to={to} subject={subject!r}\n{body}")
         return
 
-    msg = EmailMessage()
-    msg["From"] = settings.email_from_address
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
-
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-        server.starttls()
-        server.login(settings.smtp_user, settings.smtp_password)
-        server.send_message(msg)
+    try:
+        response = httpx.post(
+            RESEND_API_URL,
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.email_from_address,
+                "to": [to],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        # Don't let a transactional-email failure break the calling request
+        # (e.g. registration should still succeed even if the verification
+        # email bounces) — log it server-side instead.
+        print(f"[email:send-failed] to={to} subject={subject!r} error={exc}")
 
 
 def send_verification_email(to: str, token: str) -> None:
