@@ -7,7 +7,7 @@ shape and defaults only.
 """
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://apoxyltech:apoxyltech@localhost:5432/apoxyltech"
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_asyncpg_driver(cls, v: str) -> str:
+        # Managed hosts (Railway, Render, Heroku-style) commonly inject a
+        # plain "postgresql://" or "postgres://" URL, but SQLAlchemy's async
+        # engine requires the explicit "+asyncpg" driver suffix. Rewriting
+        # it here means we don't have to fight each host's variable UI to
+        # produce our exact expected format.
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # --- Auth / JWT ---
     jwt_secret_key: str = Field(default="change-me-in-env")
