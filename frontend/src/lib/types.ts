@@ -22,6 +22,10 @@ export interface UserPrivate extends UserPublic {
   created_at: string;
 }
 
+export interface RolePublic {
+  name: string;
+}
+
 export interface AuthTokenResponse {
   access_token: string;
   token_type: "bearer";

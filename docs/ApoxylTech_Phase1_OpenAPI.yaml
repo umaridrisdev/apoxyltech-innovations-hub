@@ -266,6 +266,67 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /users/roles:
+    get:
+      tags: [Users]
+      summary: List available role names
+      x-permission: client.read (admin only in Phase 1)
+      responses:
+        '200':
+          description: Role directory.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /users/{id}/roles:
+    patch:
+      tags: [Users]
+      summary: Replace a user's assigned roles
+      x-permission: client.read (admin only in Phase 1)
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roles]
+              properties:
+                roles:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Updated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPrivate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Would remove the last remaining admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   # ---------------------------------------------------------------- CLIENTS
   /clients:
     get:

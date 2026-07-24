@@ -34,6 +34,10 @@ class UserUpdateRequest(BaseModel):
     password: str | None = Field(default=None, min_length=12)
 
 
+class UserRoleUpdateRequest(BaseModel):
+    roles: list[str]
+
+
 # ---------------------------------------------------------------- responses
 # password_hash is intentionally absent from every schema below — see
 # SECURITY CLASSIFICATION comment on User.password_hash in app/models/identity.py.
@@ -48,6 +52,10 @@ class UserPublic(BaseModel):
 class UserPrivate(UserPublic):
     roles: list[str]
     created_at: datetime
+
+
+class RolePublic(BaseModel):
+    name: str
 
 
 class AuthTokenResponse(BaseModel):
