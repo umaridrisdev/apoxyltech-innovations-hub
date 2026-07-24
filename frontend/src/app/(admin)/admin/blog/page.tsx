@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
+import { StatusBadge } from "@/components/StatusBadge";
 import type { BlogPost, BlogPostStatus, Paginated } from "@/lib/types";
 
 export default function AdminBlogPage() {
@@ -135,7 +136,7 @@ export default function AdminBlogPage() {
                 <div>
                   <h3 className="font-medium">{post.title}</h3>
                   <p className="mt-1 text-xs text-slate-500">
-                    {post.status} · /blog/{post.slug}
+                    <StatusBadge value={post.status} /> · /blog/{post.slug}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">

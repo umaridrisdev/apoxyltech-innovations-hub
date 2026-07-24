@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
+import { StatusBadge } from "@/components/StatusBadge";
 import type { Client, Paginated, Project, ProjectStatus } from "@/lib/types";
 
 const STATUS_OPTIONS: ProjectStatus[] = [
@@ -119,19 +120,22 @@ export default function AdminProjectsPage() {
             <tr key={project.id}>
               <td className="py-2 font-medium">{project.name}</td>
               <td className="py-2">
-                <select
-                  value={project.status}
-                  onChange={(e) =>
-                    handleStatusChange(project.id, e.target.value as ProjectStatus)
-                  }
-                  className="rounded border border-slate-300 px-2 py-1 text-sm"
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>
-                      {s.replace("_", " ")}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-3">
+                  <StatusBadge value={project.status} />
+                  <select
+                    value={project.status}
+                    onChange={(e) =>
+                      handleStatusChange(project.id, e.target.value as ProjectStatus)
+                    }
+                    className="rounded border border-ink-100 px-2 py-1 text-sm"
+                  >
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s.replace("_", " ")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </td>
               <td className="py-2 text-slate-500">
                 {new Date(project.updated_at).toLocaleDateString()}
