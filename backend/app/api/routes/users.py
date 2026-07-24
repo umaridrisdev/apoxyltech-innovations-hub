@@ -1,13 +1,46 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import CurrentUser, get_current_user
+from app.core.permissions import CurrentUser, get_current_user, require_permission
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.identity import User
 from app.schemas.auth import UserPrivate, UserUpdateRequest
+from app.schemas.common import PaginatedResponse, PaginationMeta
 
 router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.get("", response_model=PaginatedResponse[UserPrivate])
+async def list_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    # "client.read" is used as the established admin-only proxy permission
+    # elsewhere in this codebase (see projects.py, clients.py) — Phase 1's
+    # 3-role model doesn't have a dedicated "user.read.all" code, and
+    # plain "user.read" is intentionally shared with the client role for
+    # self-service /users/me access, so it can't be reused here.
+    _=Depends(require_permission("client.read")),
+):
+    total = await db.scalar(select(func.count()).select_from(User))
+    rows = await db.scalars(
+        select(User).offset((page - 1) * page_size).limit(page_size)
+    )
+    data = [
+        UserPrivate(
+            id=u.id,
+            email=u.email,
+            status=u.status,
+            roles=[r.name for r in u.roles],
+            created_at=u.created_at,
+        )
+        for u in rows
+    ]
+    return PaginatedResponse(
+        data=data, meta=PaginationMeta(page=page, page_size=page_size, total=total or 0)
+    )
 
 
 @router.get("/me", response_model=UserPrivate)
