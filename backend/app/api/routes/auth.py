@@ -66,7 +66,7 @@ async def _issue_tokens(db: AsyncSession, user: User, response: Response) -> Aut
         value=raw_refresh,
         httponly=True,
         secure=settings.environment != "development",
-        samesite="strict",
+        samesite="lax" if settings.environment == "development" else "none",
         max_age=settings.refresh_token_expire_days * 24 * 3600,
         path="/api/auth",
     )
